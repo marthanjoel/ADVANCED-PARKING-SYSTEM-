@@ -1,0 +1,101 @@
+// ================= PIN DEFINITIONS =================
+const int irSensor = 2;        // IR obstacle sensor output
+const int buzzer = 3;          // Buzzer
+const int encoderCLK = 4;      // Rotary encoder CLK
+const int encoderDT = 5;       // Rotary encoder DT
+
+// RGB LED pins
+const int redPin = 9;
+const int greenPin = 10;
+const int bluePin = 11;
+
+// ================= VARIABLES =================
+int lastCLK = LOW;
+int sensitivity = 1;           // Alert sensitivity level
+int alertCounter = 0;
+
+// ================= SETUP =================
+void setup() {
+  pinMode(irSensor, INPUT);
+  pinMode(buzzer, OUTPUT);
+
+  pinMode(redPin, OUTPUT);
+  pinMode(greenPin, OUTPUT);
+  pinMode(bluePin, OUTPUT);
+
+  pinMode(encoderCLK, INPUT);
+  pinMode(encoderDT, INPUT);
+
+  Serial.begin(9600);
+  Serial.println("=== Parking Assistance System Started ===");
+}
+
+// ================= LOOP =================
+void loop() {
+
+  // -------- Read IR Sensor --------
+  int irState = digitalRead(irSensor);
+
+  if (irState == LOW) {   // Obstacle detected (Active LOW)
+    alertCounter++;
+    Serial.println("IR SENSOR: OBSTACLE DETECTED");
+  } else {
+    alertCounter = 0;
+    Serial.println("IR SENSOR: NO OBSTACLE");
+  }
+
+  // -------- Decision Logic --------
+  if (alertCounter == 0) {
+    // SAFE
+    setColor(0, 255, 0);      // GREEN
+    noTone(buzzer);
+    Serial.println("STATUS: SAFE (GREEN)");
+  }
+  else if (alertCounter < sensitivity * 5) {
+    // CAUTION
+    setColor(0, 0, 255);      // BLUE
+    digitalWrite(buzzer, HIGH); // Buzzer ON
+    Serial.println("STATUS: CAUTION (BLUE)");
+    delay(2000);                // Keep LED + buzzer ON for 2 seconds
+    digitalWrite(buzzer, LOW);  // Buzzer OFF
+  }
+  else {
+    // DANGER
+    setColor(255, 0, 0);      // RED
+    digitalWrite(buzzer, HIGH); // Buzzer ON
+    Serial.println("STATUS: DANGER (RED)");
+    delay(2000);                // Keep LED + buzzer ON for 2 seconds
+    digitalWrite(buzzer, LOW);  // Buzzer OFF
+  }
+
+  // -------- Rotary Encoder (Sensitivity Control) --------
+  int clkState = digitalRead(encoderCLK);
+
+  if (clkState != lastCLK) {
+    if (digitalRead(encoderDT) != clkState) {
+      sensitivity++;
+    } else {
+      sensitivity--;
+    }
+
+    if (sensitivity < 1) sensitivity = 1;
+    if (sensitivity > 10) sensitivity = 10;
+
+    Serial.print("SENSITIVITY LEVEL: ");
+    Serial.println(sensitivity);
+  }
+
+  lastCLK = clkState;
+
+  Serial.println("----------------------------------");
+  delay(300);
+}
+
+// ================= RGB LED FUNCTION =================
+void setColor(int r, int g, int b) {
+  analogWrite(redPin, r);
+  analogWrite(greenPin, g);
+  analogWrite(bluePin, b);
+}
+
+
