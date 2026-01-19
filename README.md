@@ -15,50 +15,7 @@ Since an ultrasonic sensor was not available, a **joystick module** is used to s
 * To use LEDs and a buzzer for clear feedback
 * To understand analog sensor readings and decision making
 
----
 
-## Components Used
-
-* Arduino Uno (main controller)
-* Joystick module (distance simulation)
-* Red LED (danger indication)
-* Yellow LED (caution indication)
-* Green LED (safe indication)
-* Buzzer (sound alert)
-* Resistors
-* Jumper wires
-* Breadboard
-*obstacle avoidance sensor# Advanced Parking Assistance System
-
-## Project Overview
-
-This project is an **Advanced Parking Assistance System** built using **Arduino**. The purpose of this system is to help drivers park their cars safely without knocking objects or obstacles.
-
-Since an ultrasonic sensor was not available, a **joystick module** is used to simulate distance measurements. The system provides **visual alerts using LEDs** and **audible alerts using a buzzer**, similar to a real vehicle parking sensor.
-
----
-
-## Objectives
-
-* To simulate a parking assistance system using Arduino
-* To warn the driver when the car is too close to an obstacle
-* To use LEDs and a buzzer for clear feedback
-* To understand analog sensor readings and decision making
-
----
-
-## Components Used
-
-* Arduino Uno (main controller)
-* Joystick module (distance simulation)
-* Red LED (danger indication)
-* Yellow LED (caution indication)
-* Green LED (safe indication)
-* Buzzer (sound alert)
-* Resistors
-* Jumper wires
-* Breadboard
-*obstacle avoidance sensor  ky032 
 ---
 
 ## System Description
@@ -128,7 +85,7 @@ This project successfully demonstrates an **Advanced Parking Assistance System**
 
 ---
 
-**Author:** [Your Name]
+**Author:** [LUTWAMA JOEL MARTHAN]
 **Project Type:** Arduino / Embedded Systems
 
 ---
