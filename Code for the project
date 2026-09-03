@@ -1,0 +1,88 @@
+// ============================================================
+// ADVANCED PARKING ASSISTANCE SYSTEM
+// ============================================================
+
+// Joystick pins
+const int joyX = A0;
+const int joyY = A1;
+
+// LED pins
+const int redLED = 9;
+const int greenLED = 10;
+const int yellowLED = 11;
+
+// Buzzer pin
+const int buzzer = 3;
+
+// KY-032 sensor pin
+const int ky032 = 2;
+
+// ============================================================
+// SETUP
+// ============================================================
+
+void setup() {
+  pinMode(redLED, OUTPUT);
+  pinMode(greenLED, OUTPUT);
+  pinMode(yellowLED, OUTPUT);
+
+  pinMode(buzzer, OUTPUT);
+  pinMode(ky032, INPUT);
+
+  Serial.begin(9600);
+}
+
+// ============================================================
+// LOOP
+// ============================================================
+
+void loop() {
+
+  // Read sensors
+  int yVal = analogRead(joyY);
+  int sensorState = digitalRead(ky032);
+
+  // Send live data to Flutter
+  Serial.print("Joystick Y: ");
+  Serial.print(yVal);
+
+  Serial.print(" | Sensor: ");
+  Serial.println(sensorState);
+
+  // Reset outputs
+  digitalWrite(redLED, LOW);
+  digitalWrite(yellowLED, LOW);
+  digitalWrite(greenLED, LOW);
+  digitalWrite(buzzer, LOW);
+
+  // ==========================================================
+  // VERY CLOSE / OBSTACLE
+  // ==========================================================
+
+  if (sensorState == LOW || yVal < 400) {
+
+    digitalWrite(redLED, HIGH);
+    digitalWrite(buzzer, HIGH);
+  }
+
+  // ==========================================================
+  // CAUTION
+  // ==========================================================
+
+  else if (yVal >= 400 && yVal <= 600) {
+
+    digitalWrite(yellowLED, HIGH);
+  }
+
+  // ==========================================================
+  // SAFE
+  // ==========================================================
+
+  else if (yVal > 600) {
+
+    digitalWrite(greenLED, HIGH);
+  }
+
+  // Small update interval
+  delay(100);
+}
