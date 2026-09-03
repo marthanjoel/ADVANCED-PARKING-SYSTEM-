@@ -1,4 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+
+import 'services/arduino_serial_service.dart';
 
 void main() {
   runApp(const ParkingAssistanceApp());
@@ -31,27 +35,198 @@ class ParkingDashboard extends StatefulWidget {
 }
 
 class _ParkingDashboardState extends State<ParkingDashboard> {
-  bool systemArmed = false;
-  bool obstacleDetected = false;
+  final ArduinoSerialService _arduino =
+      ArduinoSerialService.instance;
 
-  // Simulated Arduino joystick value.
-  // Later this will come from the Arduino.
+  StreamSubscription<String>? _serialSubscription;
+
+  List<String> availablePorts = [];
+  String? selectedPort;
+
+  bool arduinoConnected = false;
+  bool systemArmed = false;
+
   int sensorValue = 1023;
+  int sensorState = 1;
+
+  String lastSerialMessage = 'No data received';
+
+  @override
+  void initState() {
+    super.initState();
+
+    _serialSubscription = _arduino.dataStream.listen(
+      _handleSerialData,
+    );
+
+    _scanArduino();
+  }
+
+  @override
+  void dispose() {
+    _serialSubscription?.cancel();
+    super.dispose();
+  }
+
+  // ============================================================
+  // ARDUINO CONNECTION
+  // ============================================================
+
+  Future<void> _scanArduino() async {
+    try {
+      final ports = await _arduino.scanPorts();
+
+      if (!mounted) return;
+
+      setState(() {
+        availablePorts = ports;
+
+        if (ports.isNotEmpty) {
+          if (selectedPort == null ||
+              !ports.contains(selectedPort)) {
+            selectedPort = ports.first;
+          }
+        } else {
+          selectedPort = null;
+        }
+      });
+    } catch (error) {
+      if (!mounted) return;
+
+      _showMessage(
+        'Could not scan Arduino ports: $error',
+      );
+    }
+  }
+
+  Future<void> _connectArduino() async {
+    if (selectedPort == null) {
+      _showMessage('Please select an Arduino port first.');
+      return;
+    }
+
+    try {
+      final success = await _arduino.connect(
+        selectedPort!,
+        baudRate: 9600,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        arduinoConnected = success;
+      });
+
+      if (success) {
+        _showMessage(
+          'Arduino connected successfully.',
+        );
+      } else {
+        _showMessage(
+          'Could not connect to Arduino.',
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+
+      setState(() {
+        arduinoConnected = false;
+      });
+
+      _showMessage(
+        'Connection error: $error',
+      );
+    }
+  }
+
+  Future<void> _disconnectArduino() async {
+    await _arduino.disconnect();
+
+    if (!mounted) return;
+
+    setState(() {
+      arduinoConnected = false;
+      systemArmed = false;
+      lastSerialMessage = 'Arduino disconnected';
+    });
+  }
+
+  // ============================================================
+  // SERIAL DATA
+  // ============================================================
+
+  void _handleSerialData(String data) {
+    final cleaned = data.replaceAll('\r', '');
+
+    final lines = cleaned.split('\n');
+
+    for (final line in lines) {
+      final message = line.trim();
+
+      if (message.isEmpty) {
+        continue;
+      }
+
+      _processArduinoMessage(message);
+    }
+  }
+
+  void _processArduinoMessage(String message) {
+    lastSerialMessage = message;
+
+    // Example Arduino message:
+    //
+    // Joystick Y: 498 | Sensor: 1
+
+    final joystickMatch = RegExp(
+      r'Joystick\s+Y:\s*(\d+)',
+      caseSensitive: false,
+    ).firstMatch(message);
+
+    final sensorMatch = RegExp(
+      r'Sensor:\s*(\d+)',
+      caseSensitive: false,
+    ).firstMatch(message);
+
+    if (!mounted) return;
+
+    setState(() {
+      if (joystickMatch != null) {
+        final value = int.tryParse(
+          joystickMatch.group(1)!,
+        );
+
+        if (value != null) {
+          sensorValue = value.clamp(0, 1023);
+        }
+      }
+
+      if (sensorMatch != null) {
+        final value = int.tryParse(
+          sensorMatch.group(1)!,
+        );
+
+        if (value != null) {
+          sensorState = value;
+        }
+      }
+    });
+  }
+
+  // ============================================================
+  // PARKING LOGIC
+  // ============================================================
 
   String get distanceStatus {
-    if (obstacleDetected) {
+    if (sensorState == 0) {
       return 'OBSTACLE DETECTED';
     }
 
-    if (sensorValue <= 150) {
+    if (sensorValue < 400) {
       return 'VERY CLOSE';
     }
 
-    if (sensorValue <= 349) {
-      return 'CLOSE';
-    }
-
-    if (sensorValue <= 699) {
+    if (sensorValue <= 600) {
       return 'CAUTION';
     }
 
@@ -59,15 +234,19 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
   }
 
   Color get statusColor {
-    if (obstacleDetected) {
+    if (!systemArmed) {
+      return Colors.grey;
+    }
+
+    if (sensorState == 0) {
       return Colors.red;
     }
 
-    if (sensorValue <= 349) {
+    if (sensorValue < 400) {
       return Colors.red;
     }
 
-    if (sensorValue <= 699) {
+    if (sensorValue <= 600) {
       return Colors.orange;
     }
 
@@ -75,15 +254,19 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
   }
 
   IconData get statusIcon {
-    if (obstacleDetected) {
+    if (!systemArmed) {
+      return Icons.power_settings_new;
+    }
+
+    if (sensorState == 0) {
       return Icons.warning;
     }
 
-    if (sensorValue <= 349) {
+    if (sensorValue < 400) {
       return Icons.dangerous;
     }
 
-    if (sensorValue <= 699) {
+    if (sensorValue <= 600) {
       return Icons.warning_amber_rounded;
     }
 
@@ -95,12 +278,12 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
       return 'OFF';
     }
 
-    if (obstacleDetected || sensorValue <= 349) {
+    if (sensorState == 0 || sensorValue < 400) {
       return 'FAST BUZZER';
     }
 
-    if (sensorValue <= 699) {
-      return 'SLOW BUZZER';
+    if (sensorValue <= 600) {
+      return 'OFF';
     }
 
     return 'OFF';
@@ -111,37 +294,86 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
       return 'OFF';
     }
 
-    if (obstacleDetected || sensorValue <= 349) {
+    if (sensorState == 0 || sensorValue < 400) {
       return 'RED LED';
     }
 
-    if (sensorValue <= 699) {
+    if (sensorValue <= 600) {
       return 'YELLOW LED';
     }
 
     return 'GREEN LED';
   }
 
-  void startSystem() {
+  String get obstacleStatus {
+    if (sensorState == 0) {
+      return 'OBSTACLE DETECTED!';
+    }
+
+    return 'NO OBSTACLE DETECTED';
+  }
+
+  String get parkingDescription {
+    if (!systemArmed) {
+      return 'Press START SYSTEM';
+    }
+
+    if (sensorState == 0) {
+      return 'Obstacle detected. STOP!';
+    }
+
+    if (sensorValue < 400) {
+      return 'The vehicle is extremely close to the obstacle.';
+    }
+
+    if (sensorValue <= 600) {
+      return 'Be careful. The obstacle is getting closer.';
+    }
+
+    return 'Distance is safe. Continue parking carefully.';
+  }
+
+  // ============================================================
+  // SYSTEM CONTROLS
+  // ============================================================
+
+  void _startSystem() {
+    if (!arduinoConnected) {
+      _showMessage(
+        'Connect the Arduino before starting the system.',
+      );
+      return;
+    }
+
     setState(() {
       systemArmed = true;
     });
   }
 
-  void disarmSystem() {
+  void _disarmSystem() {
     setState(() {
       systemArmed = false;
-      obstacleDetected = false;
     });
   }
 
-  void setSensorValue(int value) {
-    if (!systemArmed) return;
+  // ============================================================
+  // MESSAGE
+  // ============================================================
 
-    setState(() {
-      sensorValue = value;
-    });
+  void _showMessage(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
+
+  // ============================================================
+  // BUILD
+  // ============================================================
 
   @override
   Widget build(BuildContext context) {
@@ -166,9 +398,9 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
         child: Column(
           children: [
 
-            // =====================================================
-            // VEHICLE
-            // =====================================================
+            // ====================================================
+            // VEHICLE HEADER
+            // ====================================================
 
             const Icon(
               Icons.directions_car,
@@ -189,9 +421,253 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
 
             const SizedBox(height: 20),
 
-            // =====================================================
+            // ====================================================
+            // ARDUINO CONTROL PANEL
+            // ====================================================
+
+            Card(
+              elevation: 1,
+              child: Padding(
+                padding: const EdgeInsets.all(18),
+
+                child: Column(
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
+
+                  children: [
+
+                    const Row(
+                      children: [
+
+                        Icon(
+                          Icons.usb,
+                          color: Colors.blue,
+                        ),
+
+                        SizedBox(width: 10),
+
+                        Text(
+                          'ARDUINO CONTROL PANEL',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 18),
+
+                    const Text(
+                      'ARDUINO SERIAL PORT',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+
+                    const SizedBox(height: 8),
+
+                    Row(
+                      children: [
+
+                        Expanded(
+                          child: DropdownButtonFormField<
+                              String>(
+                            initialValue:
+                                availablePorts
+                                        .contains(
+                                      selectedPort,
+                                    )
+                                    ? selectedPort
+                                    : null,
+
+                            decoration:
+                                const InputDecoration(
+                              border:
+                                  OutlineInputBorder(),
+                              hintText:
+                                  'Select Arduino',
+                            ),
+
+                            items: availablePorts
+                                .map(
+                                  (port) =>
+                                      DropdownMenuItem<
+                                          String>(
+                                    value: port,
+                                    child: Text(port),
+                                  ),
+                                )
+                                .toList(),
+
+                            onChanged: arduinoConnected
+                                ? null
+                                : (value) {
+                                    setState(() {
+                                      selectedPort =
+                                          value;
+                                    });
+                                  },
+                          ),
+                        ),
+
+                        const SizedBox(width: 8),
+
+                        IconButton(
+                          tooltip: 'Scan Arduino',
+                          onPressed:
+                              arduinoConnected
+                                  ? null
+                                  : _scanArduino,
+                          icon: const Icon(
+                            Icons.refresh,
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 15),
+
+                    Row(
+                      children: [
+
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed:
+                                arduinoConnected
+                                    ? null
+                                    : _connectArduino,
+
+                            icon: const Icon(
+                              Icons.link,
+                            ),
+
+                            label: const Text(
+                              'CONNECT',
+                              style: TextStyle(
+                                fontWeight:
+                                    FontWeight.bold,
+                              ),
+                            ),
+
+                            style:
+                                ElevatedButton.styleFrom(
+                              backgroundColor:
+                                  Colors.green,
+                              foregroundColor:
+                                  Colors.white,
+                              padding:
+                                  const EdgeInsets
+                                      .symmetric(
+                                vertical: 15,
+                              ),
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(width: 10),
+
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed:
+                                arduinoConnected
+                                    ? _disconnectArduino
+                                    : null,
+
+                            icon: const Icon(
+                              Icons.link_off,
+                            ),
+
+                            label: const Text(
+                              'DISCONNECT',
+                              style: TextStyle(
+                                fontWeight:
+                                    FontWeight.bold,
+                              ),
+                            ),
+
+                            style:
+                                ElevatedButton.styleFrom(
+                              backgroundColor:
+                                  Colors.red,
+                              foregroundColor:
+                                  Colors.white,
+                              padding:
+                                  const EdgeInsets
+                                      .symmetric(
+                                vertical: 15,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 15),
+
+                    Container(
+                      width: double.infinity,
+                      padding:
+                          const EdgeInsets.all(12),
+
+                      decoration: BoxDecoration(
+                        color: arduinoConnected
+                            ? Colors.green.shade50
+                            : Colors.grey.shade200,
+                        borderRadius:
+                            BorderRadius.circular(10),
+                      ),
+
+                      child: Row(
+                        children: [
+
+                          Icon(
+                            arduinoConnected
+                                ? Icons.check_circle
+                                : Icons
+                                    .portable_wifi_off,
+                            color: arduinoConnected
+                                ? Colors.green
+                                : Colors.grey,
+                          ),
+
+                          const SizedBox(width: 10),
+
+                          Text(
+                            arduinoConnected
+                                ? 'ARDUINO CONNECTED'
+                                : 'ARDUINO NOT CONNECTED',
+                            style: TextStyle(
+                              fontWeight:
+                                  FontWeight.bold,
+                              color: arduinoConnected
+                                  ? Colors.green
+                                  : Colors.grey.shade700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 10),
+
+                    Text(
+                      'Last data: $lastSerialMessage',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 15),
+
+            // ====================================================
             // SYSTEM STATUS
-            // =====================================================
+            // ====================================================
 
             Container(
               width: double.infinity,
@@ -201,7 +677,8 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
                 color: systemArmed
                     ? Colors.green
                     : Colors.grey.shade700,
-                borderRadius: BorderRadius.circular(16),
+                borderRadius:
+                    BorderRadius.circular(16),
               ),
 
               child: Row(
@@ -249,9 +726,9 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
 
             const SizedBox(height: 15),
 
-            // =====================================================
-            // START / DISARM BUTTONS
-            // =====================================================
+            // ====================================================
+            // START / DISARM
+            // ====================================================
 
             Row(
               children: [
@@ -259,21 +736,30 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
                 Expanded(
                   child: ElevatedButton.icon(
                     onPressed:
-                        systemArmed ? null : startSystem,
+                        systemArmed
+                            ? null
+                            : _startSystem,
 
-                    icon: const Icon(Icons.play_arrow),
+                    icon:
+                        const Icon(Icons.play_arrow),
 
                     label: const Text(
                       'START SYSTEM',
                       style: TextStyle(
-                        fontWeight: FontWeight.bold,
+                        fontWeight:
+                            FontWeight.bold,
                       ),
                     ),
 
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
+                    style:
+                        ElevatedButton.styleFrom(
+                      backgroundColor:
+                          Colors.green,
+                      foregroundColor:
+                          Colors.white,
+                      padding:
+                          const EdgeInsets
+                              .symmetric(
                         vertical: 16,
                       ),
                     ),
@@ -285,21 +771,30 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
                 Expanded(
                   child: ElevatedButton.icon(
                     onPressed:
-                        systemArmed ? disarmSystem : null,
+                        systemArmed
+                            ? _disarmSystem
+                            : null,
 
-                    icon: const Icon(Icons.stop),
+                    icon:
+                        const Icon(Icons.stop),
 
                     label: const Text(
                       'DISARM',
                       style: TextStyle(
-                        fontWeight: FontWeight.bold,
+                        fontWeight:
+                            FontWeight.bold,
                       ),
                     ),
 
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
+                    style:
+                        ElevatedButton.styleFrom(
+                      backgroundColor:
+                          Colors.red,
+                      foregroundColor:
+                          Colors.white,
+                      padding:
+                          const EdgeInsets
+                              .symmetric(
                         vertical: 16,
                       ),
                     ),
@@ -310,28 +805,26 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
 
             const SizedBox(height: 20),
 
-            // =====================================================
+            // ====================================================
             // PARKING STATUS
-            // =====================================================
+            // ====================================================
 
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(25),
+              padding:
+                  const EdgeInsets.all(25),
 
               decoration: BoxDecoration(
-                color: systemArmed
-                    ? statusColor
-                    : Colors.grey,
-                borderRadius: BorderRadius.circular(20),
+                color: statusColor,
+                borderRadius:
+                    BorderRadius.circular(20),
               ),
 
               child: Column(
                 children: [
 
                   Icon(
-                    systemArmed
-                        ? statusIcon
-                        : Icons.power_settings_new,
+                    statusIcon,
                     color: Colors.white,
                     size: 65,
                   ),
@@ -342,21 +835,21 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
                     systemArmed
                         ? distanceStatus
                         : 'SYSTEM OFF',
+
                     textAlign: TextAlign.center,
 
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 28,
-                      fontWeight: FontWeight.bold,
+                      fontWeight:
+                          FontWeight.bold,
                     ),
                   ),
 
                   const SizedBox(height: 8),
 
                   Text(
-                    systemArmed
-                        ? _description()
-                        : 'Press START SYSTEM',
+                    parkingDescription,
                     textAlign: TextAlign.center,
 
                     style: const TextStyle(
@@ -370,13 +863,14 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
 
             const SizedBox(height: 20),
 
-            // =====================================================
-            // SENSOR VALUE
-            // =====================================================
+            // ====================================================
+            // JOYSTICK / DISTANCE SENSOR
+            // ====================================================
 
             Card(
               child: Padding(
-                padding: const EdgeInsets.all(18),
+                padding:
+                    const EdgeInsets.all(18),
 
                 child: Column(
                   children: [
@@ -394,7 +888,8 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
                         Text(
                           'JOYSTICK / DISTANCE SENSOR',
                           style: TextStyle(
-                            fontWeight: FontWeight.bold,
+                            fontWeight:
+                                FontWeight.bold,
                             fontSize: 17,
                           ),
                         ),
@@ -407,7 +902,8 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
                       sensorValue.toString(),
                       style: TextStyle(
                         fontSize: 45,
-                        fontWeight: FontWeight.bold,
+                        fontWeight:
+                            FontWeight.bold,
                         color: systemArmed
                             ? statusColor
                             : Colors.grey,
@@ -423,14 +919,14 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
 
                     const SizedBox(height: 20),
 
-                    // LIVE POSITION BAR
                     SizedBox(
                       height: 45,
+
                       child: LayoutBuilder(
                         builder:
                             (context, constraints) {
 
-                          double position =
+                          final double position =
                               (sensorValue / 1023) *
                                   constraints.maxWidth;
 
@@ -440,15 +936,20 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
                               Align(
                                 alignment:
                                     Alignment.center,
+
                                 child: Container(
                                   height: 10,
-                                  width: double.infinity,
+                                  width:
+                                      double.infinity,
+
                                   decoration:
                                       BoxDecoration(
-                                    color:
-                                        Colors.grey.shade300,
+                                    color: Colors
+                                        .grey
+                                        .shade300,
                                     borderRadius:
-                                        BorderRadius.circular(
+                                        BorderRadius
+                                            .circular(
                                       10,
                                     ),
                                   ),
@@ -456,11 +957,13 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
                               ),
 
                               Positioned(
-                                left: position
-                                    .clamp(
-                                      0,
-                                      constraints.maxWidth - 20,
-                                    ),
+                                left: position.clamp(
+                                  0,
+                                  constraints
+                                          .maxWidth -
+                                      20,
+                                ),
+
                                 top: 5,
 
                                 child: Container(
@@ -473,7 +976,8 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
                                         ? statusColor
                                         : Colors.grey,
                                     borderRadius:
-                                        BorderRadius.circular(
+                                        BorderRadius
+                                            .circular(
                                       10,
                                     ),
                                   ),
@@ -487,7 +991,8 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
 
                     const Row(
                       mainAxisAlignment:
-                          MainAxisAlignment.spaceBetween,
+                          MainAxisAlignment
+                              .spaceBetween,
 
                       children: [
                         Text('0'),
@@ -500,10 +1005,13 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
 
                     const Text(
                       'VERY CLOSE        MEDIUM        SAFE',
-                      textAlign: TextAlign.center,
+                      textAlign:
+                          TextAlign.center,
+
                       style: TextStyle(
                         fontSize: 12,
-                        fontWeight: FontWeight.bold,
+                        fontWeight:
+                            FontWeight.bold,
                       ),
                     ),
                   ],
@@ -513,26 +1021,22 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
 
             const SizedBox(height: 15),
 
-            // =====================================================
+            // ====================================================
             // OBSTACLE SENSOR
-            // =====================================================
+            // ====================================================
 
             Card(
               child: SwitchListTile(
-                value: obstacleDetected,
+                value: sensorState == 0,
 
                 onChanged: systemArmed
-                    ? (value) {
-                        setState(() {
-                          obstacleDetected = value;
-                        });
-                      }
+                    ? (_) {}
                     : null,
 
                 secondary: Icon(
                   Icons.radar,
                   size: 35,
-                  color: obstacleDetected
+                  color: sensorState == 0
                       ? Colors.red
                       : Colors.green,
                 ),
@@ -540,23 +1044,22 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
                 title: const Text(
                   'OBSTACLE AVOIDANCE SENSOR',
                   style: TextStyle(
-                    fontWeight: FontWeight.bold,
+                    fontWeight:
+                        FontWeight.bold,
                   ),
                 ),
 
                 subtitle: Text(
-                  obstacleDetected
-                      ? 'OBSTACLE DETECTED!'
-                      : 'NO OBSTACLE DETECTED',
+                  obstacleStatus,
                 ),
               ),
             ),
 
             const SizedBox(height: 15),
 
-            // =====================================================
+            // ====================================================
             // LED AND BUZZER
-            // =====================================================
+            // ====================================================
 
             Row(
               children: [
@@ -564,7 +1067,8 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
                 Expanded(
                   child: Card(
                     child: Padding(
-                      padding: const EdgeInsets.all(16),
+                      padding:
+                          const EdgeInsets.all(16),
 
                       child: Column(
                         children: [
@@ -591,7 +1095,8 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
 
                           Text(
                             ledStatus,
-                            textAlign: TextAlign.center,
+                            textAlign:
+                                TextAlign.center,
                           ),
                         ],
                       ),
@@ -602,7 +1107,8 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
                 Expanded(
                   child: Card(
                     child: Padding(
-                      padding: const EdgeInsets.all(16),
+                      padding:
+                          const EdgeInsets.all(16),
 
                       child: Column(
                         children: [
@@ -629,7 +1135,8 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
 
                           Text(
                             buzzerStatus,
-                            textAlign: TextAlign.center,
+                            textAlign:
+                                TextAlign.center,
                           ),
                         ],
                       ),
@@ -641,66 +1148,66 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
 
             const SizedBox(height: 20),
 
-            // =====================================================
-            // TEST BUTTONS
-            // =====================================================
+            // ====================================================
+            // LIVE SERIAL DATA
+            // ====================================================
 
             Card(
               child: Padding(
-                padding: const EdgeInsets.all(16),
+                padding:
+                    const EdgeInsets.all(16),
 
                 child: Column(
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
+
                   children: [
 
-                    const Text(
-                      'SENSOR TEST',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-
-                    const SizedBox(height: 5),
-
-                    const Text(
-                      'These buttons simulate Arduino values.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.grey,
-                      ),
-                    ),
-
-                    const SizedBox(height: 15),
-
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-
-                      alignment:
-                          WrapAlignment.center,
-
+                    const Row(
                       children: [
 
-                        _testButton(
-                          'VERY CLOSE',
-                          100,
+                        Icon(
+                          Icons.data_object,
+                          color: Colors.blue,
                         ),
 
-                        _testButton(
-                          'CLOSE',
-                          300,
-                        ),
+                        SizedBox(width: 10),
 
-                        _testButton(
-                          'MEDIUM',
-                          512,
-                        ),
-
-                        _testButton(
-                          'SAFE',
-                          900,
+                        Text(
+                          'LIVE ARDUINO DATA',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight:
+                                FontWeight.bold,
+                          ),
                         ),
                       ],
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    Container(
+                      width: double.infinity,
+                      padding:
+                          const EdgeInsets.all(12),
+
+                      decoration: BoxDecoration(
+                        color:
+                            Colors.black87,
+                        borderRadius:
+                            BorderRadius.circular(
+                          8,
+                        ),
+                      ),
+
+                      child: Text(
+                        lastSerialMessage,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontFamily:
+                              'monospace',
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -712,7 +1219,8 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
             const Text(
               'ADVANCED PARKING ASSISTANCE SYSTEM',
               style: TextStyle(
-                fontWeight: FontWeight.bold,
+                fontWeight:
+                    FontWeight.bold,
               ),
             ),
 
@@ -721,7 +1229,8 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
             Text(
               'LUTWAMA JOEL MARTHAN',
               style: TextStyle(
-                color: Colors.grey.shade600,
+                color:
+                    Colors.grey.shade600,
               ),
             ),
 
@@ -729,36 +1238,6 @@ class _ParkingDashboardState extends State<ParkingDashboard> {
           ],
         ),
       ),
-    );
-  }
-
-  String _description() {
-    if (obstacleDetected) {
-      return 'Obstacle detected. STOP!';
-    }
-
-    if (sensorValue <= 150) {
-      return 'The vehicle is extremely close to the obstacle.';
-    }
-
-    if (sensorValue <= 349) {
-      return 'The vehicle is close to the obstacle.';
-    }
-
-    if (sensorValue <= 699) {
-      return 'Be careful. The obstacle is getting closer.';
-    }
-
-    return 'Distance is safe. Continue parking carefully.';
-  }
-
-  Widget _testButton(String text, int value) {
-    return ElevatedButton(
-      onPressed: systemArmed
-          ? () => setSensorValue(value)
-          : null,
-
-      child: Text(text),
     );
   }
 }
